@@ -223,6 +223,44 @@ w.setPadding(14, 14, 12, 14);
 w.refreshAfterDate = new Date(Date.now() + 15 * 60 * 1000);
 
 const fam = config.widgetFamily || "large";
+
+// ---- экран блокировки ----
+if (fam.startsWith("accessory")) {
+  const dd = await load();
+  const n0 = new Date(), td = iso(n0), nt = pad(n0.getHours()) + ":" + pad(n0.getMinutes());
+  const up = [];
+  if (dd) for (let i = 0; i < 8 && up.length < 4; i++) {
+    const date = addDays(td, i);
+    let l = dayLessons(dd, date).filter(x => !x.done);
+    if (i === 0) l = l.filter(x => endT(x.time, x.dur) > nt || x.time > endT(x.time, x.dur));
+    l.forEach(x => up.push({ ...x, date, i }));
+  }
+  const todayLeft = up.filter(x => x.i === 0);
+  const lw = new ListWidget();
+  lw.url = APP_URL;
+  lw.refreshAfterDate = new Date(Date.now() + 15 * 60 * 1000);
+  const dayLbl = x => x.i === 0 ? "" : x.i === 1 ? "завтра " : DSH[dayIdx(x.date)] + " ";
+  if (fam === "accessoryInline") {
+    lw.addText(!dd ? "Нет данных" : up.length ? "📒 " + dayLbl(up[0]) + up[0].time + " " + up[0].name : "📒 Занятий нет");
+  } else if (fam === "accessoryCircular") {
+    lw.addAccessoryWidgetBackground = true;
+    const t1 = lw.addText(String(todayLeft.length)); t1.font = Font.boldSystemFont(22); t1.centerAlignText();
+    const t2 = lw.addText("сегодня"); t2.font = Font.systemFont(9); t2.centerAlignText();
+  } else {
+    if (!dd) { lw.addText("Нет данных"); }
+    else if (!up.length) { const t = lw.addText("Занятий нет"); t.font = Font.semiboldSystemFont(14); }
+    else {
+      const hdr = up[0].i === 0 ? "Сегодня" : up[0].i === 1 ? "Завтра" : DSH[dayIdx(up[0].date)] + ", " + fmt(up[0].date);
+      const h = lw.addText(hdr + (up[0].i === 0 ? " · осталось " + todayLeft.length : "")); h.font = Font.boldSystemFont(13); h.lineLimit = 1;
+      up.filter(x => x.date === up[0].date).slice(0, 3).forEach(x => {
+        const t = lw.addText(x.time + "  " + x.name); t.font = Font.systemFont(13); t.lineLimit = 1;
+      });
+    }
+  }
+  Script.setWidget(lw);
+  Script.complete();
+} else {
+
 const small = fam === "small";
 let budget = { small: 4, medium: 5, large: 12 }[fam] || 5;
 const d = await load();
@@ -279,6 +317,7 @@ w.addSpacer();
 if (config.runsInWidget) Script.setWidget(w);
 else await w.presentLarge();
 Script.complete();
+}
 </script>
 <script>
 /* ---------- helpers ---------- */
@@ -623,7 +662,7 @@ function syncSheet(){
     <div class="field"><label>1. Установите бесплатное приложение Scriptable из App Store</label>
       <a class="btn" style="display:block;text-align:center;text-decoration:none" href="https://apps.apple.com/app/scriptable/id1405459188" target="_blank" rel="noopener">Открыть App Store</a></div>
     <div class="field"><label>2. Скопируйте код виджета</label><button class="btn primary" id="y-code">Скопировать код виджета</button>
-      <p class="note" style="text-align:left">В Scriptable нажмите «+», вставьте код, вверху назовите скрипт «Занятия» и нажмите Done.</p></div>
+      <p class="note" style="text-align:left">В Scriptable нажмите «+», вставьте код, вверху назовите скрипт «Занятия» и нажмите Done. Если скрипт уже есть — откройте его, удалите старый код и вставьте новый.</p></div>
     <div class="field"><label>3. Добавьте виджет</label>
       <p class="note" style="text-align:left;margin-top:0">Зажмите пустое место на экране «Домой» → «Изменить» → «Добавить виджет» → Scriptable → выберите размер. Затем нажмите на виджет и в поле Script выберите «Занятия».</p></div>
     <hr><div class="actions"><button class="btn" id="y-now">Отправить данные сейчас</button><button class="btn danger" id="y-off">Отключить</button></div>`,()=>{
