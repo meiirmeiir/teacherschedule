@@ -57,7 +57,8 @@ button{cursor:pointer}
 .list{background:var(--card);border:1.5px solid var(--line);border-radius:14px;overflow:hidden}
 .row{display:flex;align-items:center;gap:12px;padding:12px 12px 12px 14px;border-top:1px solid var(--line);width:100%;background:none;border-left:none;border-right:none;border-bottom:none;text-align:left}
 .row:first-child{border-top:none}
-.row .t{font-variant-numeric:tabular-nums;font-weight:600;color:var(--ink);width:48px;flex:none}
+.row .t{font-variant-numeric:tabular-nums;font-weight:600;color:var(--ink);width:50px;flex:none;line-height:1.2}
+.row .t small{display:block;font-weight:400;font-size:13px;color:var(--muted)}
 .row .who{flex:1;min-width:0}
 .row .who b{font-weight:600;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .row .who span{font-size:13px;color:var(--muted)}
@@ -105,7 +106,7 @@ button{cursor:pointer}
 .seg button{flex:1;border:none;background:var(--paper);padding:10px 4px;font-size:14px;font-weight:500}
 .seg button[aria-pressed="true"]{background:var(--ink);color:var(--card)}
 .slot{display:flex;gap:8px;margin-bottom:8px}
-.slot select{flex:1.3} .slot input{flex:1}
+.slot .s-d{flex:.8} .slot input{flex:1} .slot .s-u{flex:1.1}
 .slot select,.slot input{padding:10px;border:1.5px solid var(--line);border-radius:10px;background:var(--paper);min-height:44px;font-size:16px}
 .x{flex:none;width:44px;border:1.5px solid var(--line);border-radius:10px;background:var(--paper);color:var(--muted);font-size:18px}
 .link{border:none;background:none;color:var(--ink);font-weight:600;padding:6px 0;font-size:15px}
@@ -153,6 +154,132 @@ hr{border:none;border-top:1px solid var(--line);margin:18px 0}
 <div class="veil" id="veil"></div>
 <section class="sheet" id="sheet" role="dialog" aria-modal="true"></section>
 
+<script type="text/plain" id="widget-code">// Виджет «Занятия» для Scriptable
+const DATA_URL = "__DATA_URL__";
+const APP_URL = "__APP_URL__";
+
+const fm = FileManager.local();
+const cache = fm.joinPath(fm.documentsDirectory(), "lessons-cache.json");
+const C = {
+  bg: Color.dynamic(new Color("#FFFFFF"), new Color("#171E35")),
+  ink: Color.dynamic(new Color("#1E2F6B"), new Color("#AFC2FF")),
+  text: Color.dynamic(new Color("#1B2233"), new Color("#E6EAF5")),
+  muted: Color.dynamic(new Color("#6B7690"), new Color("#8892AE")),
+  red: Color.dynamic(new Color("#D23B2F"), new Color("#FF6B5E"))
+};
+const MON = ["янв","фев","мар","апр","мая","июн","июл","авг","сен","окт","ноя","дек"];
+const DSH = ["Пн","Вт","Ср","Чт","Пт","Сб","Вс"];
+const pad = n => String(n).padStart(2, "0");
+const iso = d => d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate());
+const parse = s => { const [y, m, d] = s.split("-").map(Number); return new Date(y, m - 1, d); };
+const addDays = (s, n) => { const d = parse(s); d.setDate(d.getDate() + n); return iso(d); };
+const dayIdx = s => (parse(s).getDay() + 6) % 7;
+const fmt = s => { const d = parse(s); return d.getDate() + " " + MON[d.getMonth()]; };
+const endT = (t, u) => { const [h, m] = t.split(":").map(Number); const x = (h * 60 + m + (+u || 60)) % 1440; return pad(Math.floor(x / 60)) + ":" + pad(x % 60); };
+
+async function load() {
+  try {
+    const r = new Request(DATA_URL + "?t=" + Date.now());
+    r.timeoutInterval = 10;
+    const d = await r.loadJSON();
+    if (d && d.students) { fm.writeString(cache, JSON.stringify(d)); return d; }
+  } catch (e) {}
+  return fm.fileExists(cache) ? JSON.parse(fm.readString(cache)) : null;
+}
+
+function dayLessons(d, date) {
+  const out = [];
+  d.students.forEach(st => (st.slots || []).forEach(sl => {
+    if (sl.d !== dayIdx(date) || !sl.t || (st.since && date < st.since)) return;
+    if (d.lessons[st.id + "_" + date + "_" + sl.t.replace(":", "")]) return;
+    out.push({ sid: st.id, name: st.name, time: sl.t, dur: +sl.u || 60, done: false });
+  }));
+  Object.values(d.lessons || {}).forEach(r => {
+    const dt = r.moved ? r.moved.date : r.date, tm = r.moved ? r.moved.time : r.time;
+    const st = d.students.find(s => s.id === r.sid);
+    if (dt !== date || r.cancelled || !st) return;
+    out.push({ sid: r.sid, name: st.name, time: tm, dur: +r.dur || 60, done: !!r.done });
+  });
+  return out.sort((a, b) => a.time.localeCompare(b.time));
+}
+
+function due(d, st, today) {
+  const pays = Object.values(d.payments || {}).filter(p => p.sid === st.id);
+  const done = Object.values(d.lessons || {}).filter(l => l.sid === st.id && l.done).length;
+  const paid = pays.reduce((a, p) => a + (+p.count || 0), 0);
+  if (st.type === "week") {
+    let u = null;
+    pays.forEach(p => { const x = addDays(p.date, 7 * (+p.count || 1)); if (!u || x > u) u = x; });
+    return !u || u <= today;
+  }
+  if (st.type === "pack") return paid - done <= 0;
+  return done - paid > 0;
+}
+
+const w = new ListWidget();
+w.backgroundColor = C.bg;
+w.url = APP_URL;
+w.setPadding(14, 14, 12, 14);
+w.refreshAfterDate = new Date(Date.now() + 15 * 60 * 1000);
+
+const fam = config.widgetFamily || "large";
+const small = fam === "small";
+let budget = { small: 4, medium: 5, large: 12 }[fam] || 5;
+const d = await load();
+const now = new Date();
+const today = iso(now);
+const nowT = pad(now.getHours()) + ":" + pad(now.getMinutes());
+
+function addText(stack, txt, font, color) {
+  const t = stack.addText(txt); t.font = font; t.textColor = color; t.lineLimit = 1; return t;
+}
+
+if (!d) {
+  addText(w, "Занятия", Font.boldSystemFont(15), C.ink);
+  w.addSpacer(6);
+  const t = addText(w, "Нет данных. Откройте приложение и подключите виджет.", Font.systemFont(12), C.muted);
+  t.lineLimit = 4;
+} else {
+  const hd = w.addStack(); hd.centerAlignContent();
+  addText(hd, small ? "Сегодня" : "Сегодня, " + fmt(today), Font.boldSystemFont(small ? 14 : 15), C.ink);
+  budget--;
+  w.addSpacer(6);
+  let shown = 0;
+  for (let i = 0; i < 8 && budget > 0; i++) {
+    const date = addDays(today, i);
+    let list = dayLessons(d, date);
+    if (i === 0) list = list.filter(x => endT(x.time, x.dur) > nowT || x.time > endT(x.time, x.dur));
+    if (!list.length) continue;
+    if (i > 0) {
+      if (budget < 2) break;
+      if (shown) w.addSpacer(4);
+      addText(w, i === 1 ? "Завтра" : DSH[dayIdx(date)] + ", " + fmt(date), Font.semiboldSystemFont(12), C.muted);
+      budget--;
+      w.addSpacer(2);
+    }
+    for (const x of list) {
+      if (budget <= 0) break;
+      const st = d.students.find(s => s.id === x.sid);
+      const row = w.addStack(); row.centerAlignContent();
+      const ts = row.addStack(); ts.size = new Size(small ? 42 : 92, 0);
+      addText(ts, small ? x.time : x.time + "–" + endT(x.time, x.dur), Font.semiboldMonospacedSystemFont(12), x.done ? C.muted : C.ink);
+      ts.addSpacer();
+      if (st && due(d, st, today)) { addText(row, "● ", Font.systemFont(9), C.red); }
+      addText(row, x.name, Font.mediumSystemFont(13), x.done ? C.muted : C.text);
+      if (x.done) { row.addSpacer(4); addText(row, "✓", Font.boldSystemFont(12), C.ink); }
+      row.addSpacer();
+      w.addSpacer(3);
+      budget--; shown++;
+    }
+  }
+  if (!shown) addText(w, "Ближайших занятий нет", Font.systemFont(13), C.muted);
+}
+w.addSpacer();
+
+if (config.runsInWidget) Script.setWidget(w);
+else await w.presentLarge();
+Script.complete();
+</script>
 <script>
 /* ---------- helpers ---------- */
 const DAYS=['Понедельник','Вторник','Среда','Четверг','Пятница','Суббота','Воскресенье'];
@@ -172,6 +299,9 @@ const rid=()=>Math.random().toString(36).slice(2,10);
 const money=n=>(+n||0).toLocaleString('ru-RU');
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const clone=o=>JSON.parse(JSON.stringify(o));
+const endT=(t,u)=>{const[h,m]=t.split(':').map(Number);const x=(h*60+m+(+u||60))%1440;return pad(Math.floor(x/60))+':'+pad(x%60)};
+const DURS=[30,45,60,75,90,105,120,150,180];
+const durOpts=v=>{v=+v||60;const l=DURS.includes(v)?DURS:[...DURS,v].sort((a,b)=>a-b);return l.map(d=>`<option value="${d}"${d===v?' selected':''}>${d<60?d+' мин':(d%60?Math.floor(d/60)+' ч '+d%60+' м':d/60+' ч')}</option>`).join('')};
 const lid=(sid,date,time)=>sid+'_'+date+'_'+time.replace(':','');
 const plural=(n,a,b,c)=>{n=Math.abs(n)%100;const m=n%10;if(n>10&&n<20)return c;if(m>1&&m<5)return b;if(m===1)return a;return c};
 
@@ -183,14 +313,14 @@ const ui={tab:'week',week:weekStart(today()),month:today().slice(0,7)};
 function lsStore(){
   const K='lessons-app-v1';
   try{const d=JSON.parse(localStorage.getItem(K)||'null');if(d){S.students=d.students||[];S.lessons=d.lessons||{};S.payments=d.payments||{}}}catch(e){}
-  const save=()=>{try{localStorage.setItem(K,JSON.stringify(S))}catch(e){}};
+  const save=()=>{try{localStorage.setItem(K,JSON.stringify(S))}catch(e){};scheduleSync()};
   return{
     saveStudents(){save()},
     saveLesson(id,r){if(r)S.lessons[id]=r;else delete S.lessons[id];save()},
     savePayment(id,p){if(p)S.payments[id]=p;else delete S.payments[id];save()}
   };
 }
-function init(){mode='local';store=lsStore();render()}
+function init(){mode='local';store=lsStore();render();scheduleSync()}
 
 /* ---------- logic ---------- */
 const stu=id=>S.students.find(s=>s.id===id);
@@ -224,16 +354,16 @@ function weekItems(ws){
   S.students.forEach(st=>(st.slots||[]).forEach(sl=>{
     const date=days[sl.d];if(!sl.t||(st.since&&date<st.since))return;
     const id=lid(st.id,date,sl.t);if(S.lessons[id])return;
-    items.push({id,sid:st.id,date,time:sl.t,origDate:date,origTime:sl.t,rec:null});
+    items.push({id,sid:st.id,date,time:sl.t,dur:+sl.u||60,origDate:date,origTime:sl.t,rec:null});
   }));
   Object.entries(S.lessons).forEach(([id,r])=>{
     const date=r.moved?r.moved.date:r.date,time=r.moved?r.moved.time:r.time;
-    if(date>=ws&&date<=we&&stu(r.sid))items.push({id,sid:r.sid,date,time,origDate:r.date,origTime:r.time,rec:r});
+    if(date>=ws&&date<=we&&stu(r.sid))items.push({id,sid:r.sid,date,time,dur:+r.dur||60,origDate:r.date,origTime:r.time,rec:r});
   });
   return items.sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time));
 }
-function recOf(it){return it.rec?clone(it.rec):{sid:it.sid,date:it.origDate,time:it.origTime,done:false,cancelled:false,moved:null,extra:false}}
-function putRec(id,r){const def=!r.done&&!r.cancelled&&!r.moved&&!r.extra;store.saveLesson(id,def?null:r);render()}
+function recOf(it){const r=it.rec?clone(it.rec):{sid:it.sid,date:it.origDate,time:it.origTime,done:false,cancelled:false,moved:null,extra:false};if(!r.dur)r.dur=it.dur||60;return r}
+function putRec(id,r,slotDur){const def=!r.done&&!r.cancelled&&!r.moved&&!r.extra&&(+r.dur||60)===(slotDur||60);store.saveLesson(id,def?null:r);render()}
 
 /* ---------- render ---------- */
 const app=document.getElementById('app');
@@ -266,7 +396,7 @@ function renderWeek(){
       else if(r.extra)sub='Доп. занятие';
       const cls=(r.done?' done':'')+(r.cancelled?' cancel':'');
       return `<div class="row${cls}" data-act="lesson" data-id="${it.id}" data-date="${it.date}" role="button" tabindex="0">
-        <span class="t">${it.time}</span><span class="who"><b>${esc(st.name)}</b><span>${esc(sub)}</span></span>
+        <span class="t">${it.time}<small>${endT(it.time,it.dur)}</small></span><span class="who"><b>${esc(st.name)}</b><span>${esc(sub)}</span></span>
         ${r.cancelled?'':`<button class="tick" data-act="tick" data-id="${it.id}" data-date="${it.date}" aria-label="${r.done?'Снять отметку':'Отметить проведённым'}">${TICK}</button>`}</div>`;
     }).join('')}</div>`;
     h+='</div>';
@@ -286,7 +416,7 @@ function renderMoney(){
   let h=`<div class="top"><button class="arrow" data-act="mprev" aria-label="Предыдущий месяц">‹</button>
     <h1>${MONTHS[mm-1]}<small>${yy}${cur?'':' · <button class="today-btn" data-act="mcur">К текущему месяцу</button>'}</small></h1>
     <button class="arrow" data-act="mnext" aria-label="Следующий месяц">›</button></div>
-    <div class="total"><b>${money(total)}</b><span>получено за месяц · ${mp.length} ${plural(mp.length,'оплата','оплаты','оплат')} · проведено ${doneM.length} ${plural(doneM.length,'занятие','занятия','занятий')}</span></div>
+    <div class="total"><b>${money(total)}</b><span>получено за месяц · ${mp.length} ${plural(mp.length,'оплата','оплаты','оплат')} · проведено ${doneM.length} ${plural(doneM.length,'занятие','занятия','занятий')} · ${(doneM.reduce((t,l)=>t+(+l.dur||60),0)/60).toLocaleString('ru-RU',{maximumFractionDigits:1})} ч</span></div>
     <div class="minis"><div><b>${money(yearT)}</b><span>за ${y} год</span></div><div><b>${money(allT)}</b><span>за всё время</span></div></div>`;
   const by={};mp.forEach(p=>{(by[p.sid]=by[p.sid]||{sum:0,n:0}).sum+=(+p.amount||0)});
   doneM.forEach(l=>{(by[l.sid]=by[l.sid]||{sum:0,n:0}).n++});
@@ -308,6 +438,7 @@ function renderStudents(){
       <span class="who"><b>${esc(s.name)}</b><span>${TYPES[s.type]} · проведено ${r.done}</span></span>
       <span class="stat ${r.level==='pay'?'pay':''}">${esc(r.text)}</span></button>`}).join('')}</div>`;
   h+=`<button class="big-btn" data-act="newstu">Добавить ученика</button>`;
+  h+=`<hr><button class="btn" data-act="sync" style="text-align:left;display:flex;justify-content:space-between;align-items:center"><span>Виджет на экран «Домой»</span><span style="font-size:13px;font-weight:500;color:${SY.err?'var(--red)':'var(--muted)'}">${SY.gistId?(SY.err?'ошибка':'подключён'):'настроить'}</span></button>`;
   h+=`<hr><p class="note" style="text-align:left;margin:0 0 10px">Данные хранятся только на этом телефоне. Время от времени копируйте резервную копию в Заметки.</p>
     <div class="two"><button class="btn" data-act="backup">Копировать копию</button><button class="btn" data-act="restore">Восстановить</button></div>`;
   return h;
@@ -322,27 +453,29 @@ const $=s=>sheet.querySelector(s);
 
 function findItem(id,date){const ws=weekStart(date);return weekItems(ws).find(x=>x.id===id)}
 
+function slotDurOf(it){const st=stu(it.sid);const sl=st&&(st.slots||[]).find(x=>x.d===dayIdx(it.origDate)&&x.t===it.origTime);return sl?(+sl.u||60):null}
 function lessonSheet(it){
   const st=stu(it.sid),r=it.rec||{},stt=status(st);
-  openSheet(`<h2>${esc(st.name)}</h2><div class="sub">${DAYS[dayIdx(it.date)]}, ${fmt(it.date)} в ${it.time} · ${esc(stt.text)}</div>
+  openSheet(`<h2>${esc(st.name)}</h2><div class="sub">${DAYS[dayIdx(it.date)]}, ${fmt(it.date)}, ${it.time}–${endT(it.time,it.dur)} · ${esc(stt.text)}</div>
     <div class="actions">
       ${r.cancelled?'':`<button class="btn primary" id="l-done">${r.done?'Снять отметку':'Провёл занятие'}</button>`}
-      <button class="btn" id="l-move">Перенести</button>
+      <button class="btn" id="l-move">Перенести или изменить длительность</button>
       <div id="move" class="hidden"><div class="two"><div class="field"><label>Новая дата</label><input type="date" id="m-date" value="${it.date}"></div>
         <div class="field"><label>Время</label><input type="time" id="m-time" value="${it.time}"></div></div>
+        <div class="field"><label>Длительность</label><select id="m-dur">${durOpts(it.dur)}</select></div>
         <button class="btn primary" id="m-save">Сохранить перенос</button></div>
       <button class="btn" id="l-pay">Записать оплату</button>
       ${r.extra?`<button class="btn danger" id="l-del">Удалить занятие</button>`:`<button class="btn danger" id="l-cancel">${r.cancelled?'Вернуть занятие':'Отменить занятие'}</button>`}
     </div>`,()=>{
-    const d=$('#l-done');if(d)d.onclick=()=>{const x=recOf(it);x.done=!x.done;putRec(it.id,x);closeSheet()};
+    const d=$('#l-done');if(d)d.onclick=()=>{const x=recOf(it);x.done=!x.done;putRec(it.id,x,slotDurOf(it));closeSheet()};
     $('#l-move').onclick=()=>$('#move').classList.toggle('hidden');
     $('#m-save').onclick=()=>{const nd=$('#m-date').value,nt=$('#m-time').value;if(!nd||!nt)return;
       const x=recOf(it);
       if(x.extra){x.date=nd;x.time=nt;x.moved=null}
       else x.moved=(nd===x.date&&nt===x.time)?null:{date:nd,time:nt};
-      x.cancelled=false;putRec(it.id,x);ui.week=weekStart(nd);closeSheet();render()};
+      x.dur=+$('#m-dur').value||60;x.cancelled=false;putRec(it.id,x,slotDurOf(it));ui.week=weekStart(nd);closeSheet();render()};
     $('#l-pay').onclick=()=>paySheet(st);
-    const c=$('#l-cancel');if(c)c.onclick=()=>{const x=recOf(it);x.cancelled=!x.cancelled;if(x.cancelled)x.done=false;putRec(it.id,x);closeSheet()};
+    const c=$('#l-cancel');if(c)c.onclick=()=>{const x=recOf(it);x.cancelled=!x.cancelled;if(x.cancelled)x.done=false;putRec(it.id,x,slotDurOf(it));closeSheet()};
     const del=$('#l-del');if(del)del.onclick=()=>{store.saveLesson(it.id,null);render();closeSheet()};
   });
 }
@@ -353,9 +486,10 @@ function addSheet(date){
     <div class="field"><label>Ученик</label><select id="a-s">${S.students.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select></div>
     <div class="two"><div class="field"><label>Дата</label><input type="date" id="a-d" value="${date}"></div>
     <div class="field"><label>Время</label><input type="time" id="a-t" value="16:00"></div></div>
+    <div class="field"><label>Длительность</label><select id="a-u">${durOpts(60)}</select></div>
     <div class="actions"><button class="btn primary" id="a-save">Добавить</button></div>`,()=>{
     $('#a-save').onclick=()=>{const sid=$('#a-s').value,d=$('#a-d').value,t=$('#a-t').value;if(!d||!t)return;
-      store.saveLesson('x'+rid(),{sid,date:d,time:t,done:false,cancelled:false,moved:null,extra:true});ui.week=weekStart(d);render();closeSheet()};
+      store.saveLesson('x'+rid(),{sid,date:d,time:t,dur:+$('#a-u').value||60,done:false,cancelled:false,moved:null,extra:true});ui.week=weekStart(d);render();closeSheet()};
   });
 }
 
@@ -377,12 +511,12 @@ function paySheet(st){
 
 function studentSheet(st){
   const isNew=!st;
-  const s=st?clone(st):{id:rid(),name:'',type:'pack',price:'',pack:8,slots:[{d:0,t:'16:00'}],since:weekStart(today())};
+  const s=st?clone(st):{id:rid(),name:'',type:'pack',price:'',pack:8,slots:[{d:0,t:'16:00',u:60}],since:weekStart(today())};
   const r=isNew?null:status(st);
   const pays=isNew?[]:Object.entries(S.payments).filter(([,p])=>p.sid===s.id).sort((a,b)=>b[1].date.localeCompare(a[1].date));
   const priceLabel=t=>t==='pack'?'Цена пакета':t==='week'?'Цена за неделю':'Цена занятия';
-  const slotRow=(sl,i)=>`<div class="slot" data-i="${i}"><select class="s-d">${DAYS.map((d,j)=>`<option value="${j}"${j==sl.d?' selected':''}>${d}</option>`).join('')}</select>
-    <input type="time" class="s-t" value="${sl.t}"><button class="x" data-rm="${i}" aria-label="Убрать">×</button></div>`;
+  const slotRow=(sl,i)=>`<div class="slot" data-i="${i}"><select class="s-d" aria-label="День">${DSHORT.map((d,j)=>`<option value="${j}"${j==sl.d?' selected':''}>${d}</option>`).join('')}</select>
+    <input type="time" class="s-t" value="${sl.t}" aria-label="Начало"><select class="s-u" aria-label="Длительность">${durOpts(sl.u)}</select><button class="x" data-rm="${i}" aria-label="Убрать">×</button></div>`;
   const statsHtml=isNew?'':`<div class="stats"><div><b>${r.done}</b><span>проведено</span></div>
     <div><b>${s.type==='week'?(r.until?fmt(r.until):'—'):s.type==='pack'?r.left:Math.max(0,r.debt)}</b><span>${s.type==='week'?'след. оплата':s.type==='pack'?'осталось':'долг, зан.'}</span></div>
     <div><b>${r.last?fmt(r.last):'—'}</b><span>посл. оплата</span></div></div>`;
@@ -398,12 +532,12 @@ function studentSheet(st){
     <div class="actions"><button class="btn primary" id="s-save">${isNew?'Добавить ученика':'Сохранить'}</button>
       ${isNew?'':`<button class="btn danger" id="s-del">Удалить ученика</button>`}</div>
     ${pays.length?`<hr><div class="field"><label>История оплат</label><div class="pays">${pays.map(([id,p])=>`<div class="pay-row"><span>${fmt(p.date)} · ${money(p.amount)} · ${p.count} ${s.type==='week'?plural(p.count,'неделя','недели','недель'):'зан.'}</span><button class="x" data-delpay="${id}" aria-label="Удалить оплату">×</button></div>`).join('')}</div></div>`:''}`,()=>{
-    const readSlots=()=>[...sheet.querySelectorAll('.slot')].map(el=>({d:+el.querySelector('.s-d').value,t:el.querySelector('.s-t').value}));
+    const readSlots=()=>[...sheet.querySelectorAll('.slot')].map(el=>({d:+el.querySelector('.s-d').value,t:el.querySelector('.s-t').value,u:+el.querySelector('.s-u').value||60}));
     const drawSlots=sl=>{$('#slots').innerHTML=sl.map(slotRow).join('')};
     const syncType=()=>{$('#packf').classList.toggle('hidden',s.type!=='pack');$('#pl').textContent=priceLabel(s.type)};syncType();
     $('#s-type').onclick=e=>{const b=e.target.closest('[data-t]');if(!b)return;s.type=b.dataset.t;
       sheet.querySelectorAll('#s-type button').forEach(x=>x.setAttribute('aria-pressed',x===b));syncType()};
-    $('#s-add').onclick=()=>{const sl=readSlots();sl.push({d:sl.length?Math.min(6,sl[sl.length-1].d+2):0,t:sl.length?sl[sl.length-1].t:'16:00'});drawSlots(sl)};
+    $('#s-add').onclick=()=>{const sl=readSlots();sl.push({d:sl.length?Math.min(6,sl[sl.length-1].d+2):0,t:sl.length?sl[sl.length-1].t:'16:00',u:sl.length?sl[sl.length-1].u:60});drawSlots(sl)};
     $('#slots').onclick=e=>{const b=e.target.closest('[data-rm]');if(!b)return;const sl=readSlots();sl.splice(+b.dataset.rm,1);drawSlots(sl)};
     $('#s-save').onclick=()=>{
       const name=$('#s-name').value.trim();if(!name){$('#s-name').focus();return}
@@ -417,6 +551,86 @@ function studentSheet(st){
       Object.entries(S.payments).forEach(([id,pp])=>{if(pp.sid===s.id)store.savePayment(id,null)});
       render();closeSheet()};
     sheet.querySelectorAll('[data-delpay]').forEach(b=>b.onclick=()=>{if(!confirm('Удалить эту оплату?'))return;store.savePayment(b.dataset.delpay,null);render();studentSheet(stu(s.id))});
+  });
+}
+
+/* ---------- sync (GitHub gist) + widget ---------- */
+const SK='lessons-sync';
+let SY=(()=>{try{return JSON.parse(localStorage.getItem(SK)||'{}')}catch(e){return{}}})();
+const saveSY=()=>{try{localStorage.setItem(SK,JSON.stringify(SY))}catch(e){}};
+async function gh(path,opt={}){
+  let r;try{r=await fetch('https://api.github.com'+path,{...opt,headers:{Authorization:'Bearer '+SY.token,Accept:'application/vnd.github+json','Content-Type':'application/json'}})}
+  catch(e){throw new Error('Нет связи с GitHub')}
+  if(!r.ok)throw new Error(r.status===401?'Токен не подходит':r.status===404||r.status===403?'Нет доступа: у токена должна быть галочка gist':'GitHub: ошибка '+r.status);
+  return r.json();
+}
+const payload=()=>JSON.stringify({app:'lessons',v:1,saved:new Date().toISOString(),students:S.students,lessons:S.lessons,payments:S.payments});
+const dataUrl=()=>`https://gist.githubusercontent.com/${SY.login}/${SY.gistId}/raw/lessons.json`;
+let syncT=null,syncing=false,again=false;
+function scheduleSync(){if(!SY.gistId)return;clearTimeout(syncT);syncT=setTimeout(syncNow,2500)}
+async function syncNow(){
+  if(!SY.gistId)return;if(syncing){again=true;return}syncing=true;
+  try{await gh('/gists/'+SY.gistId,{method:'PATCH',body:JSON.stringify({files:{'lessons.json':{content:payload()}}})});SY.last=new Date().toISOString();SY.err=''}
+  catch(e){SY.err=e.message}
+  saveSY();syncing=false;if(ui.tab==='students')render();
+  const st=sheet.querySelector('#y-st');if(st)st.innerHTML=syncStatus();
+  if(again){again=false;syncNow()}
+}
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&SY.err)scheduleSync()});
+async function connect(token){
+  SY={token};
+  const list=await gh('/gists?per_page=100');
+  const g=list.find(x=>x.description==='teacherschedule-data'&&x.files&&x.files['lessons.json']);
+  if(g){
+    SY.gistId=g.id;SY.login=g.owner.login;saveSY();
+    const full=await gh('/gists/'+g.id);const f=full.files['lessons.json'];
+    let data=null;try{data=JSON.parse(f.truncated?await (await fetch(f.raw_url)).text():f.content)}catch(e){}
+    if(data&&Array.isArray(data.students)&&data.students.length&&
+      (!S.students.length||confirm('В облаке уже есть данные ('+data.students.length+' уч.). Загрузить их на этот телефон?\n\n«Отмена» — оставить данные телефона и записать их в облако.'))){
+      S.students=data.students;S.lessons=data.lessons||{};S.payments=data.payments||{};store.saveStudents();render();return}
+  }else{
+    const ng=await gh('/gists',{method:'POST',body:JSON.stringify({description:'teacherschedule-data',public:false,files:{'lessons.json':{content:payload()}}})});
+    SY.gistId=ng.id;SY.login=ng.owner.login;
+  }
+  saveSY();await syncNow();
+}
+function syncStatus(){
+  if(SY.err)return `<span style="color:var(--red)">${esc(SY.err)}</span>`;
+  if(!SY.last)return 'Синхронизация…';
+  const d=new Date(SY.last);return 'Данные отправлены: '+fmt(iso(d))+', '+pad(d.getHours())+':'+pad(d.getMinutes());
+}
+async function copyText(txt,okMsg){
+  try{await navigator.clipboard.writeText(txt);alert(okMsg)}
+  catch(e){openSheet(`<h2>Скопируйте текст</h2><div class="sub">Выделите всё и нажмите «Скопировать»</div><textarea id="c-t" readonly style="width:100%;height:260px;border:1.5px solid var(--line);border-radius:10px;background:var(--paper);padding:10px;font-size:12px">${esc(txt)}</textarea>`,()=>$('#c-t').select())}
+}
+function syncSheet(){
+  if(!SY.gistId){
+    openSheet(`<h2>Виджет на экран «Домой»</h2><div class="sub">Расписание будет видно на главном экране. Для этого данные копируются в ваш GitHub — в секретный gist, который не виден в профиле.</div>
+      <div class="field"><label>1. Создайте ключ доступа на GitHub</label>
+        <a class="btn" style="display:block;text-align:center;text-decoration:none" href="https://github.com/settings/tokens/new?scopes=gist&description=teacherschedule" target="_blank" rel="noopener">Открыть GitHub</a>
+        <p class="note" style="text-align:left">Expiration → <b>No expiration</b>, галочка <b>gist</b> уже стоит. Внизу нажмите <b>Generate token</b> и скопируйте ключ (начинается с ghp_).</p></div>
+      <div class="field"><label>2. Вставьте ключ</label><input id="y-tok" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="ghp_…"></div>
+      <p class="note hidden" id="y-err" style="color:var(--red);text-align:left"></p>
+      <div class="actions"><button class="btn primary" id="y-go">Подключить</button></div>`,()=>{
+      $('#y-go').onclick=async()=>{const t=$('#y-tok').value.trim();if(!t){$('#y-tok').focus();return}
+        const b=$('#y-go');b.disabled=true;b.textContent='Подключаю…';
+        try{await connect(t);render();syncSheet()}
+        catch(e){SY={};saveSY();$('#y-err').textContent=e.message;$('#y-err').classList.remove('hidden');b.disabled=false;b.textContent='Подключить'}};
+    });
+    return;
+  }
+  openSheet(`<h2>Виджет на экран «Домой»</h2><div class="sub" id="y-st">${syncStatus()}</div>
+    <div class="field"><label>1. Установите бесплатное приложение Scriptable из App Store</label>
+      <a class="btn" style="display:block;text-align:center;text-decoration:none" href="https://apps.apple.com/app/scriptable/id1405459188" target="_blank" rel="noopener">Открыть App Store</a></div>
+    <div class="field"><label>2. Скопируйте код виджета</label><button class="btn primary" id="y-code">Скопировать код виджета</button>
+      <p class="note" style="text-align:left">В Scriptable нажмите «+», вставьте код, вверху назовите скрипт «Занятия» и нажмите Done.</p></div>
+    <div class="field"><label>3. Добавьте виджет</label>
+      <p class="note" style="text-align:left;margin-top:0">Зажмите пустое место на экране «Домой» → «Изменить» → «Добавить виджет» → Scriptable → выберите размер. Затем нажмите на виджет и в поле Script выберите «Занятия».</p></div>
+    <hr><div class="actions"><button class="btn" id="y-now">Отправить данные сейчас</button><button class="btn danger" id="y-off">Отключить</button></div>`,()=>{
+    $('#y-code').onclick=()=>{const code=document.getElementById('widget-code').textContent.replace('__DATA_URL__',dataUrl()).replace('__APP_URL__',location.origin+location.pathname);
+      copyText(code,'Код скопирован. Вставьте его в Scriptable.')};
+    $('#y-now').onclick=()=>{$('#y-st').textContent='Отправляю…';syncNow()};
+    $('#y-off').onclick=()=>{if(!confirm('Отключить? Виджет перестанет обновляться. Данные на телефоне останутся.'))return;SY={};saveSY();render();closeSheet()};
   });
 }
 
@@ -441,7 +655,7 @@ function restoreSheet(){
 document.querySelector('.tabs').onclick=e=>{const b=e.target.closest('[data-tab]');if(!b)return;ui.tab=b.dataset.tab;render();window.scrollTo(0,0)};
 app.addEventListener('click',e=>{
   const el=e.target.closest('[data-act]');if(!el)return;const a=el.dataset.act;
-  if(a==='tick'){e.stopPropagation();const it=findItem(el.dataset.id,el.dataset.date);if(!it)return;const x=recOf(it);x.done=!x.done;putRec(it.id,x);return}
+  if(a==='tick'){e.stopPropagation();const it=findItem(el.dataset.id,el.dataset.date);if(!it)return;const x=recOf(it);x.done=!x.done;putRec(it.id,x,slotDurOf(it));return}
   if(a==='prev'){ui.week=addDays(ui.week,-7);render()}
   else if(a==='next'){ui.week=addDays(ui.week,7);render()}
   else if(a==='cur'){ui.week=weekStart(today());render()}
@@ -451,6 +665,7 @@ app.addEventListener('click',e=>{
   else if(a==='stu'){const s=stu(el.dataset.sid);if(s)studentSheet(s)}
   else if(a==='newstu')studentSheet(null);
   else if(a==='backup')backup();
+  else if(a==='sync')syncSheet();
   else if(a==='mprev'){ui.month=shiftMonth(ui.month,-1);render()}
   else if(a==='mnext'){ui.month=shiftMonth(ui.month,1);render()}
   else if(a==='mcur'){ui.month=today().slice(0,7);render()}
